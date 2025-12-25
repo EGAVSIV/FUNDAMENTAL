@@ -149,7 +149,6 @@ if run_scan:
             df.to_excel(index=False),
             file_name="india_fundamental_screener.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-"
         )
 
 # =========================
