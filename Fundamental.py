@@ -134,8 +134,8 @@ if run_scan:
         st.subheader(f"📋 Screener Results ({len(df)} stocks)")
         st.dataframe(
             df[display_cols].sort_values("Market Cap (₹ Cr)", ascending=False),
-                use_container_width=True
-            )
+            use_container_width=True
+        )
     
             # =========================
             # EXPORT
@@ -145,7 +145,7 @@ if run_scan:
                 df.to_excel(writer, index=False, sheet_name="Fundamentals")
             st.download_button(
                 label="⬇️ Download Excel",
-                data=output.getvalue(),   # ✅ bytes only
+                data=output.getvalue(),
                 file_name="india_fundamental_screener.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
