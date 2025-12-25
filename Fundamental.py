@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from tradingview_screener import Query, Column as col
 from typing import Optional
+import io
 
 # =========================
 # PAGE CONFIG
@@ -139,11 +140,16 @@ if run_scan:
         # =========================
         # EXPORT
         # =========================
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            df.to_excel(writer, index=False, sheet_name="Fundamentals")
         st.download_button(
-            "⬇️ Download Excel",
+            label="⬇️ Download Excel",
+            data=output.getvalue(),
             df.to_excel(index=False),
-            "india_fundamental_screener.xlsx",
-            "application/vnd.ms-excel"
+            file_name="india_fundamental_screener.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+"
         )
 
 # =========================
