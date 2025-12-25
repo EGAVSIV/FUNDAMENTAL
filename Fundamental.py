@@ -2,24 +2,26 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import io
+import time
 from tradingview_screener import Query, Column as col
 from typing import Optional
+import requests
 
-# =============================
+# ==================================================
 # PAGE CONFIG
-# =============================
+# ==================================================
 st.set_page_config(
-    page_title="🇮🇳 Indian Fundamental Intelligence",
-    page_icon="📊",
-    layout="wide"
+    page_title="🇮🇳 Indian Fundamental Screener Pro",
+    layout="wide",
+    page_icon="📊"
 )
 
-st.title("📊 Indian Stock Fundamental Intelligence Dashboard")
-st.caption("Income Statement • Balance Sheet • Cash Flow • Smart Scoring")
+st.title("📊 Indian Fundamental Screener Pro")
+st.caption("Stable • Cloud-safe • TradingView Powered")
 
-# =============================
+# ==================================================
 # SIDEBAR CONTROLS
-# =============================
+# ==================================================
 st.sidebar.header("⚙️ Controls")
 
 PRESETS = {
@@ -29,25 +31,32 @@ PRESETS = {
     "Large Cap": "large_cap",
     "Small Cap": "small_cap",
     "Highest Revenue": "highest_revenue",
-    "High Dividend": "high_dividend",
 }
 
-preset = PRESETS[st.sidebar.selectbox("TradingView Preset", PRESETS.keys())]
-
-period = st.sidebar.radio("Financial Period", ["TTM", "Quarterly"])
-
-min_pe, max_pe = st.sidebar.slider("PE Range", 0, 80, (5, 40))
+preset = PRESETS[st.sidebar.selectbox("Preset", PRESETS.keys())]
+limit = st.sidebar.slider("Stocks to Scan", 20, 120, 60)
 min_roe = st.sidebar.slider("Min ROE %", 0, 30, 10)
-max_debt = st.sidebar.number_input("Max Total Debt (₹ Cr)", value=50000)
-limit = st.sidebar.slider("No. of Stocks", 20, 300, 100)
+min_pe, max_pe = st.sidebar.slider("PE Range", 0, 80, (5, 40))
+max_debt = st.sidebar.number_input("Max Debt (₹ Cr)", value=50000)
 
 run = st.sidebar.button("🚀 Run Screener")
 
-# =============================
-# DATA FETCH
-# =============================
-def fetch_data(preset: Optional[str]) -> pd.DataFrame:
+# ==================================================
+# SAFE API CALL WRAPPER
+# ==================================================
+def safe_query(q: Query) -> pd.DataFrame:
+    try:
+        _, df = q.get_scanner_data(timeout=30)
+        return df
+    except requests.exceptions.HTTPError:
+        return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
 
+# ==================================================
+# STEP 1 — BASE SCREENER (PRESET SAFE)
+# ==================================================
+def fetch_base(preset: Optional[str], limit: int) -> pd.DataFrame:
     q = (
         Query()
         .set_markets("india")
@@ -55,18 +64,8 @@ def fetch_data(preset: Optional[str]) -> pd.DataFrame:
             "name",
             "sector",
             "market_cap_basic",
-            "total_revenue_ttm",
-            "net_income_ttm",
-            "operating_income",
             "price_earnings_ttm",
             "return_on_equity",
-            "return_on_assets",
-            "total_assets",
-            "total_current_liabilities",
-            "total_debt",
-            "net_debt",
-            "free_cash_flow_ttm",
-            "book_value_per_share_fq",
             "close",
             "change",
             "volume",
@@ -75,9 +74,6 @@ def fetch_data(preset: Optional[str]) -> pd.DataFrame:
             col("type") == "stock",
             col("typespecs").has("common"),
             col("is_primary") == True,
-            col("price_earnings_ttm").between(min_pe, max_pe),
-            col("return_on_equity") >= min_roe,
-            col("total_debt") <= max_debt * 1e7,
         )
         .limit(limit)
     )
@@ -85,24 +81,63 @@ def fetch_data(preset: Optional[str]) -> pd.DataFrame:
     if preset:
         q = q.set_property("preset", preset)
 
-    _, df = q.get_scanner_data()
-    return df
+    return safe_query(q)
 
-# =============================
-# MAIN LOGIC
-# =============================
+# ==================================================
+# STEP 2 — FUNDAMENTAL ENRICHMENT (NO PRESET)
+# ==================================================
+def enrich_fundamentals(names: list[str]) -> pd.DataFrame:
+    q = (
+        Query()
+        .set_markets("india")
+        .select(
+            "name",
+            "total_revenue_ttm",
+            "net_income_ttm",
+            "operating_income",
+            "total_assets",
+            "total_current_liabilities",
+            "total_debt",
+            "net_debt",
+            "free_cash_flow_ttm",
+            "book_value_per_share_fq",
+            "return_on_assets",
+        )
+        .where(col("name").isin(names))
+        .limit(len(names))
+    )
+
+    return safe_query(q)
+
+# ==================================================
+# MAIN EXECUTION
+# ==================================================
 if run:
 
-    with st.spinner("Fetching & Processing Data..."):
-        df = fetch_data(preset)
+    with st.spinner("Scanning Indian Markets (Safe Mode)..."):
+        base_df = fetch_base(preset, limit)
+        time.sleep(1)  # rate-limit safety
 
-    if df.empty:
-        st.warning("No stocks matched criteria.")
+    if base_df.empty:
+        st.error("TradingView rejected request. Try smaller limit or no preset.")
         st.stop()
 
-    # =============================
+    # Apply basic filters locally
+    base_df = base_df[
+        (base_df["return_on_equity"] >= min_roe)
+        & (base_df["price_earnings_ttm"].between(min_pe, max_pe))
+    ]
+
+    names = base_df["name"].tolist()
+
+    with st.spinner("Fetching Financial Statements..."):
+        fund_df = enrich_fundamentals(names)
+
+    df = base_df.merge(fund_df, on="name", how="left")
+
+    # ==================================================
     # DERIVED METRICS
-    # =============================
+    # ==================================================
     df["ROCE %"] = (
         df["operating_income"]
         / (df["total_assets"] - df["total_current_liabilities"])
@@ -110,10 +145,13 @@ if run:
 
     df["Market Cap (₹ Cr)"] = df["market_cap_basic"] / 1e7
     df["Revenue (₹ Cr)"] = df["total_revenue_ttm"] / 1e7
+    df["Debt (₹ Cr)"] = df["total_debt"] / 1e7
 
-    # =============================
+    df = df[df["Debt (₹ Cr)"] <= max_debt]
+
+    # ==================================================
     # FUNDAMENTAL SCORE (0–100)
-    # =============================
+    # ==================================================
     df["Fundamental Score"] = (
         df["return_on_equity"].rank(pct=True) * 30 +
         df["ROCE %"].rank(pct=True) * 30 +
@@ -121,114 +159,78 @@ if run:
         df["free_cash_flow_ttm"].rank(pct=True) * 20
     ).round(1)
 
-    # =============================
-    # MAIN TABLE
-    # =============================
+    # ==================================================
+    # TABLE
+    # ==================================================
     st.subheader("📋 Screener Results")
 
-    styled = df[
-        [
-            "name", "sector", "Market Cap (₹ Cr)", "Revenue (₹ Cr)",
-            "price_earnings_ttm", "return_on_equity", "ROCE %",
-            "total_debt", "Fundamental Score"
-        ]
-    ].sort_values("Fundamental Score", ascending=False)
-
     st.dataframe(
-        styled.style
-        .background_gradient(subset=["Fundamental Score"], cmap="RdYlGn")
-        .background_gradient(subset=["return_on_equity", "ROCE %"], cmap="Greens"),
+        df.sort_values("Fundamental Score", ascending=False)[
+            [
+                "name", "sector", "Market Cap (₹ Cr)", "Revenue (₹ Cr)",
+                "price_earnings_ttm", "return_on_equity",
+                "ROCE %", "Debt (₹ Cr)", "Fundamental Score"
+            ]
+        ].style
+        .background_gradient(subset=["Fundamental Score"], cmap="RdYlGn"),
         use_container_width=True
     )
 
-    # =============================
+    # ==================================================
     # CHARTS
-    # =============================
+    # ==================================================
     st.subheader("📊 Visual Intelligence")
 
     c1, c2 = st.columns(2)
 
-    # ROE vs ROCE Scatter
-    fig_scatter = px.scatter(
-        df,
-        x="return_on_equity",
-        y="ROCE %",
-        size="Market Cap (₹ Cr)",
-        color="sector",
-        hover_name="name",
-        title="ROE vs ROCE (Efficiency Map)",
+    c1.plotly_chart(
+        px.scatter(
+            df,
+            x="return_on_equity",
+            y="ROCE %",
+            size="Market Cap (₹ Cr)",
+            color="sector",
+            hover_name="name",
+            title="ROE vs ROCE Efficiency Map",
+        ),
+        use_container_width=True
     )
-    c1.plotly_chart(fig_scatter, use_container_width=True)
 
-    # Sector Comparison
-    sector_df = df.groupby("sector")["Fundamental Score"].mean().reset_index()
-    fig_sector = px.bar(
-        sector_df,
-        x="sector",
-        y="Fundamental Score",
-        title="Sector-wise Average Fundamental Score",
-        color="Fundamental Score",
-        color_continuous_scale="Viridis",
+    sector_avg = df.groupby("sector")["Fundamental Score"].mean().reset_index()
+    c2.plotly_chart(
+        px.bar(
+            sector_avg,
+            x="sector",
+            y="Fundamental Score",
+            color="Fundamental Score",
+            title="Sector-wise Fundamental Strength",
+        ),
+        use_container_width=True
     )
-    c2.plotly_chart(fig_sector, use_container_width=True)
 
-    # Debt vs Market Cap
-    fig_debt = px.scatter(
-        df,
-        x="Market Cap (₹ Cr)",
-        y="total_debt",
-        color="Fundamental Score",
-        hover_name="name",
-        title="Debt vs Market Cap",
+    st.plotly_chart(
+        px.pie(
+            df.nlargest(10, "Revenue (₹ Cr)"),
+            names="name",
+            values="Revenue (₹ Cr)",
+            hole=0.45,
+            title="Top Revenue Contributors",
+        ),
+        use_container_width=True
     )
-    st.plotly_chart(fig_debt, use_container_width=True)
 
-    # Donut Chart – Revenue Share
-    top_rev = df.nlargest(10, "Revenue (₹ Cr)")
-    fig_donut = px.pie(
-        top_rev,
-        names="name",
-        values="Revenue (₹ Cr)",
-        hole=0.5,
-        title="Top 10 Revenue Contribution",
-    )
-    st.plotly_chart(fig_donut, use_container_width=True)
-
-    # =============================
-    # STOCK DEEP DIVE
-    # =============================
-    st.subheader("🔍 Stock Deep Dive")
-
-    selected = st.selectbox("Select Stock", df["name"].unique())
-    s = df[df["name"] == selected].iloc[0]
-
-    d1, d2, d3 = st.columns(3)
-
-    d1.metric("Market Cap (₹ Cr)", round(s["Market Cap (₹ Cr)"], 2))
-    d1.metric("PE Ratio", round(s.price_earnings_ttm, 2))
-    d1.metric("Book Value / Share", round(s.book_value_per_share_fq, 2))
-
-    d2.metric("ROE %", round(s.return_on_equity, 2))
-    d2.metric("ROCE %", round(s["ROCE %"], 2))
-    d2.metric("ROA %", round(s.return_on_assets, 2))
-
-    d3.metric("Total Debt (₹ Cr)", round(s.total_debt / 1e7, 2))
-    d3.metric("Net Debt (₹ Cr)", round(s.net_debt / 1e7, 2))
-    d3.metric("Fundamental Score", round(s["Fundamental Score"], 1))
-
-    # =============================
+    # ==================================================
     # EXPORT
-    # =============================
+    # ==================================================
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Fundamentals")
+        df.to_excel(writer, index=False)
 
     st.download_button(
         "⬇️ Download Excel",
-        data=buffer.getvalue(),
-        file_name="india_fundamental_intelligence.xlsx",
+        buffer.getvalue(),
+        "india_fundamental_screener.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    st.markdown("---")
-    st.caption("Built for serious investors • Data via TradingView • Python + Streamlit")
+    st.caption("Stable on Streamlit Cloud • Designed for Serious Investors")
