@@ -134,22 +134,21 @@ if run_scan:
         st.subheader(f"📋 Screener Results ({len(df)} stocks)")
         st.dataframe(
             df[display_cols].sort_values("Market Cap (₹ Cr)", ascending=False),
-            use_container_width=True
-        )
-
-        # =========================
-        # EXPORT
-        # =========================
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name="Fundamentals")
-        st.download_button(
-            label="⬇️ Download Excel",
-            data=output.getvalue(),
-            df.to_excel(index=False),
-            file_name="india_fundamental_screener.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+                use_container_width=True
+            )
+    
+            # =========================
+            # EXPORT
+            # =========================
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                df.to_excel(writer, index=False, sheet_name="Fundamentals")
+            st.download_button(
+                label="⬇️ Download Excel",
+                data=output.getvalue(),   # ✅ bytes only
+                file_name="india_fundamental_screener.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
 # =========================
 # FOOTER
